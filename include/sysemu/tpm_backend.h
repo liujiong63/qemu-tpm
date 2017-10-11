@@ -18,6 +18,7 @@
 #include "qapi-types.h"
 #include "qemu/option.h"
 #include "sysemu/tpm.h"
+#include "qemu/thread.h"
 
 #define TYPE_TPM_BACKEND "tpm-backend"
 #define TPM_BACKEND(obj) \
@@ -53,6 +54,10 @@ struct TPMBackend {
     char *id;
 
     QLIST_ENTRY(TPMBackend) list;
+
+    QemuMutex state_lock;
+    QemuCond cmd_complete; /* signaled once tpm_busy is false */
+    bool tpm_busy;
 };
 
 struct TPMBackendClass {
@@ -205,6 +210,15 @@ size_t tpm_backend_get_buffer_size(TPMBackend *s);
  * Returns newly allocated TPMInfo
  */
 TPMInfo *tpm_backend_query_tpm(TPMBackend *s);
+
+/**
+ * tpm_backend_cmd_completed:
+ * @s: the backend
+ *
+ * Mark the backend as not busy and notify anyone interested
+ * in the state changed
+ */
+void tpm_backend_cmd_completed(TPMBackend *s);
 
 TPMBackend *qemu_find_tpm_be(const char *id);
 
