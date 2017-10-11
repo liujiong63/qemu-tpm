@@ -20,6 +20,14 @@
 #include "qemu/thread.h"
 #include "qemu/main-loop.h"
 
+void tpm_backend_cmd_completed(TPMBackend *s)
+{
+    qemu_mutex_lock(&s->state_lock);
+    s->tpm_busy = false;
+    qemu_cond_signal(&s->cmd_complete);
+    qemu_mutex_unlock(&s->state_lock);
+}
+
 static void tpm_backend_request_completed_bh(void *opaque)
 {
     TPMBackend *s = TPM_BACKEND(opaque);
@@ -36,6 +44,9 @@ static void tpm_backend_worker_thread(gpointer data, gpointer user_data)
     k->handle_request(s, (TPMBackendCmd *)data);
 
     qemu_bh_schedule(s->bh);
+
+    /* result delivered */
+    tpm_backend_cmd_completed(s);
 }
 
 static void tpm_backend_thread_end(TPMBackend *s)
@@ -64,6 +75,10 @@ int tpm_backend_init(TPMBackend *s, TPMIf *tpmif, Error **errp)
     object_ref(OBJECT(tpmif));
 
     s->had_startup_error = false;
+    s->tpm_busy = false;
+
+    qemu_mutex_init(&s->state_lock);
+    qemu_cond_init(&s->cmd_complete);
 
     return 0;
 }
@@ -93,6 +108,10 @@ bool tpm_backend_had_startup_error(TPMBackend *s)
 
 void tpm_backend_deliver_request(TPMBackend *s, TPMBackendCmd *cmd)
 {
+    qemu_mutex_lock(&s->state_lock);
+    s->tpm_busy = true;
+    qemu_mutex_unlock(&s->state_lock);
+
     g_thread_pool_push(s->thread_pool, cmd, NULL);
 }
 
