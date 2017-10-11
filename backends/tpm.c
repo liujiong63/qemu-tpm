@@ -28,6 +28,16 @@ void tpm_backend_cmd_completed(TPMBackend *s)
     qemu_mutex_unlock(&s->state_lock);
 }
 
+void tpm_backend_wait_cmd_completed(TPMBackend *s)
+{
+    qemu_mutex_lock(&s->state_lock);
+
+    if (s->tpm_busy) {
+        qemu_cond_wait(&s->cmd_complete, &s->state_lock);
+    }
+    qemu_mutex_unlock(&s->state_lock);
+}
+
 static void tpm_backend_request_completed_bh(void *opaque)
 {
     TPMBackend *s = TPM_BACKEND(opaque);
