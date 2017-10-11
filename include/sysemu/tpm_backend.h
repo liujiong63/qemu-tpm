@@ -220,6 +220,16 @@ TPMInfo *tpm_backend_query_tpm(TPMBackend *s);
  */
 void tpm_backend_cmd_completed(TPMBackend *s);
 
+/**
+ * tpm_backend_wait_cmd_completed:
+ * @s: the backend
+ *
+ * Wait the backend to not be busy anymore
+ *
+ * Returns true in case we needed to wait, false otherwise
+ */
+bool tpm_backend_wait_cmd_completed(TPMBackend *s);
+
 TPMBackend *qemu_find_tpm_be(const char *id);
 
 #endif
