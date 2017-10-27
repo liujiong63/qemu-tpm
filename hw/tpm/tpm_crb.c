@@ -27,6 +27,8 @@
 #include "tpm_int.h"
 #include "tpm_util.h"
 
+#define CRB_CTRL_CMD_SIZE (TPM_CRB_ADDR_SIZE - sizeof(struct crb_regs))
+
 typedef struct CRBState {
     SysBusDevice parent_obj;
 
@@ -35,6 +37,7 @@ typedef struct CRBState {
     struct crb_regs regs;
     MemoryRegion mmio;
     MemoryRegion cmdmem;
+    unsigned char buf[CRB_CTRL_CMD_SIZE];
 } CRBState;
 
 #define CRB(obj) OBJECT_CHECK(CRBState, (obj), TYPE_TPM_CRB)
@@ -62,8 +65,6 @@ typedef struct CRBState {
 #define CRB_INTF_CAP_CRB_SUPPORTED 0b1
 #define CRB_INTF_IF_SELECTOR_CRB 0b1
 #define CRB_INTF_IF_SELECTOR_UNLOCKED 0b0
-
-#define CRB_CTRL_CMD_SIZE (TPM_CRB_ADDR_SIZE - sizeof(struct crb_regs))
 
 enum crb_loc_ctrl {
     CRB_LOC_CTRL_REQUEST_ACCESS = BIT(0),
@@ -240,12 +241,17 @@ static void tpm_crb_reset(DeviceState *dev)
     tpm_backend_startup_tpm(s->tpmbe, CRB_CTRL_CMD_SIZE);
 }
 
+static void _tpm_crb_request_completed(CRBState *s)
+{
+    s->regs.ctrl_start &= ~CRB_START_INVOKE;
+    /* TODO, in case of error: s->regs.ctrl_sts = CRB_CTRL_STS_ERROR */
+}
+
 static void tpm_crb_request_completed(TPMIf *ti)
 {
     CRBState *s = CRB(ti);
 
-    s->regs.ctrl_start &= ~CRB_START_INVOKE;
-    /* TODO, in case of error: s->regs.ctrl_sts = CRB_CTRL_STS_ERROR */
+    _tpm_crb_request_completed(s);
 }
 
 static enum TPMVersion tpm_crb_get_version(TPMIf *ti)
@@ -255,9 +261,67 @@ static enum TPMVersion tpm_crb_get_version(TPMIf *ti)
     return tpm_backend_get_tpm_version(s->tpmbe);
 }
 
+/* persistent state handling */
+
+static int tpm_crb_pre_save(void *opaque)
+{
+    CRBState *s = opaque;
+    void *mem = memory_region_get_ram_ptr(&s->cmdmem);
+    bool run_bh_func;
+
+    /*
+     * Synchronize with backend completion.
+     */
+    run_bh_func = tpm_backend_wait_cmd_completed(s->tpmbe);
+    if (run_bh_func) {
+        /* bottom half did not run - run its function */
+        _tpm_crb_request_completed(s);
+    }
+
+    memcpy(s->buf, mem, sizeof(s->buf));
+
+    return 0;
+}
+
+static int tpm_crb_post_load(void *opaque,
+                             int version_id __attribute__((unused)))
+{
+    CRBState *s = opaque;
+    void *mem = memory_region_get_ram_ptr(&s->cmdmem);
+
+    memcpy(mem, s->buf, sizeof(s->buf));
+
+    return 0;
+}
+
 static const VMStateDescription vmstate_tpm_crb = {
     .name = "tpm-crb",
-    .unmigratable = 1,
+    .version_id = 1,
+    .minimum_version_id = 0,
+    .minimum_version_id_old = 0,
+    .pre_save  = tpm_crb_pre_save,
+    .post_load = tpm_crb_post_load,
+    .fields      = (VMStateField[]) {
+        VMSTATE_UINT32(regs.loc_state.reg, CRBState),
+        VMSTATE_UINT32(regs.loc_ctrl, CRBState),
+        VMSTATE_UINT32(regs.loc_sts.reg, CRBState),
+        VMSTATE_UINT64(regs.intf_id.reg, CRBState),
+        VMSTATE_UINT64(regs.ctrl_ext, CRBState),
+        VMSTATE_UINT32(regs.ctrl_req, CRBState),
+        VMSTATE_UINT32(regs.ctrl_sts.reg, CRBState),
+        VMSTATE_UINT32(regs.ctrl_cancel, CRBState),
+        VMSTATE_UINT32(regs.ctrl_start, CRBState),
+        VMSTATE_UINT32(regs.ctrl_int_enable, CRBState),
+        VMSTATE_UINT32(regs.ctrl_int_sts, CRBState),
+        VMSTATE_UINT32(regs.ctrl_cmd_size, CRBState),
+        VMSTATE_UINT32(regs.ctrl_cmd_pa_low, CRBState),
+        VMSTATE_UINT32(regs.ctrl_rsp_size, CRBState),
+        VMSTATE_UINT64(regs.ctrl_rsp_pa, CRBState),
+
+        VMSTATE_UINT8_ARRAY(buf, CRBState, CRB_CTRL_CMD_SIZE),
+
+        VMSTATE_END_OF_LIST(),
+    }
 };
 
 static Property tpm_crb_properties[] = {
