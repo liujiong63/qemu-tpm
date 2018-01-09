@@ -66,4 +66,10 @@ struct crb_regs {
 #define TPM2_START_METHOD_MMIO      6
 #define TPM2_START_METHOD_CRB       7
 
+/*
+ * Physical Presence Interface
+ */
+#define TPM_PPI_ADDR_SIZE           0x400
+#define TPM_PPI_ADDR_BASE           0xfffef000
+
 #endif /* HW_ACPI_TPM_H */
