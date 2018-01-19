@@ -50,6 +50,7 @@
 #include "hw/usb.h"
 #include "qemu/error-report.h"
 #include "sysemu/numa.h"
+#include "sysemu/tpm.h"
 
 /* ICH9 AHCI has 6 ports */
 #define MAX_SATA_PORTS     6
@@ -303,6 +304,7 @@ static void pc_q35_machine_options(MachineClass *m)
     m->no_floppy = 1;
     machine_class_allow_dynamic_sysbus_dev(m, TYPE_AMD_IOMMU_DEVICE);
     machine_class_allow_dynamic_sysbus_dev(m, TYPE_INTEL_IOMMU_DEVICE);
+    machine_class_allow_dynamic_sysbus_dev(m, TYPE_TPM_CRB);
     m->max_cpus = 288;
 }
 
