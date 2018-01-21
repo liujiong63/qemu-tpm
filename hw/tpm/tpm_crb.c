@@ -18,7 +18,7 @@
 
 #include "qemu-common.h"
 #include "qapi/error.h"
-#include "hw/sysbus.h"
+#include "hw/isa/isa.h"
 #include "exec/address-spaces.h"
 
 #include "hw/pci/pci_ids.h"
@@ -28,13 +28,12 @@
 #include "tpm_util.h"
 
 typedef struct CRBState {
-    SysBusDevice parent_obj;
+    ISADevice busdev;
 
     TPMBackend *tpmbe;
     TPMBackendCmd cmd;
     struct crb_regs regs;
     MemoryRegion mmio;
-    MemoryRegion cmdmem;
 
     size_t be_buffer_size;
 } CRBState;
@@ -54,6 +53,7 @@ typedef struct CRBState {
 #define CRB_ADDR_CTRL_REQ offsetof(struct crb_regs, ctrl_req)
 #define CRB_ADDR_CTRL_CANCEL offsetof(struct crb_regs, ctrl_cancel)
 #define CRB_ADDR_CTRL_START offsetof(struct crb_regs, ctrl_start)
+#define CRB_ADDR_BUFFER_START offsetof(struct crb_regs, data_buffer)
 
 #define CRB_INTF_TYPE_CRB_ACTIVE        (1 << 0)
 #define CRB_INTF_VERSION_CRB            (1 << 4)
@@ -74,8 +74,6 @@ typedef struct CRBState {
 
 #define CRB_CTRL_STS_TPM_STS            (1 << 0)
 #define CRB_CTRL_STS_TPM_IDLE           (1 << 1)
-
-#define CRB_CTRL_CMD_SIZE (TPM_CRB_ADDR_SIZE - sizeof(struct crb_regs))
 
 enum crb_loc_ctrl {
     CRB_LOC_CTRL_REQUEST_ACCESS = BIT(0),
@@ -149,6 +147,7 @@ static void tpm_crb_mmio_write(void *opaque, hwaddr addr,
                                uint64_t val, unsigned size)
 {
     CRBState *s = CRB(opaque);
+    void *p;
     DPRINTF("CRB write 0x" TARGET_FMT_plx ":%s len:%u val:%" PRIu64 "\n",
             addr, addr_desc(addr), size, val);
 
@@ -171,7 +170,7 @@ static void tpm_crb_mmio_write(void *opaque, hwaddr addr,
     case CRB_ADDR_CTRL_START:
         if (val == CRB_START_INVOKE &&
             !(s->regs.ctrl_start & CRB_START_INVOKE)) {
-            void *mem = memory_region_get_ram_ptr(&s->cmdmem);
+            void *mem = &s->regs.data_buffer;
 
             s->regs.ctrl_start |= CRB_START_INVOKE;
             s->cmd = (TPMBackendCmd) {
@@ -198,6 +197,20 @@ static void tpm_crb_mmio_write(void *opaque, hwaddr addr,
             break;
         }
         break;
+    case CRB_ADDR_BUFFER_START ... 0xfff:
+        p = &s->regs.data_buffer[addr - CRB_ADDR_BUFFER_START];
+        switch (size) {
+        case 1:
+            *(uint8_t *)p = val;
+            break;
+        case 2:
+            *(uint16_t *)p = cpu_to_le16(val);
+            break;
+        case 4:
+            *(uint32_t *)p = cpu_to_le32(val);
+            break;
+        }
+        break;
     }
 }
 
@@ -218,7 +231,7 @@ static void tpm_crb_reset(DeviceState *dev)
     tpm_backend_reset(s->tpmbe);
 
     s->be_buffer_size = MIN(tpm_backend_get_buffer_size(s->tpmbe),
-                            CRB_CTRL_CMD_SIZE);
+                            sizeof(s->regs.data_buffer));
 
     s->regs = (struct crb_regs) {
         .intf_id_low =
@@ -236,10 +249,10 @@ static void tpm_crb_reset(DeviceState *dev)
             PCI_VENDOR_ID_IBM |
             0b0001 << 16
         ,
-        .ctrl_cmd_size = CRB_CTRL_CMD_SIZE,
-        .ctrl_cmd_pa_low = TPM_CRB_ADDR_BASE + sizeof(struct crb_regs),
-        .ctrl_rsp_size = CRB_CTRL_CMD_SIZE,
-        .ctrl_rsp_pa_low = TPM_CRB_ADDR_BASE + sizeof(struct crb_regs),
+        .ctrl_cmd_size = sizeof(s->regs.data_buffer),
+        .ctrl_cmd_pa_low = TPM_CRB_ADDR_BASE + offsetof(struct crb_regs, data_buffer),
+        .ctrl_rsp_size = sizeof(s->regs.data_buffer),
+        .ctrl_rsp_pa_low = TPM_CRB_ADDR_BASE + offsetof(struct crb_regs, data_buffer),
     };
 
     tpm_backend_startup_tpm(s->tpmbe, s->be_buffer_size);
@@ -275,7 +288,6 @@ static Property tpm_crb_properties[] = {
 static void tpm_crb_realizefn(DeviceState *dev, Error **errp)
 {
     CRBState *s = CRB(dev);
-    SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
 
     if (!tpm_find()) {
         error_setg(errp, "at most one TPM device is permitted");
@@ -287,15 +299,10 @@ static void tpm_crb_realizefn(DeviceState *dev, Error **errp)
     }
 
     memory_region_init_io(&s->mmio, OBJECT(s), &tpm_crb_memory_ops, s,
-        "tpm-crb-mmio", sizeof(struct crb_regs));
-    memory_region_init_ram(&s->cmdmem, OBJECT(s),
-        "tpm-crb-cmd", CRB_CTRL_CMD_SIZE, errp);
+        "tpm-crb-mmio", TPM_CRB_ADDR_SIZE);
 
-    sysbus_init_mmio(sbd, &s->mmio);
-    sysbus_mmio_map(sbd, 0, TPM_CRB_ADDR_BASE);
-    /* allocate ram in bios instead? */
-    memory_region_add_subregion(get_system_memory(),
-        TPM_CRB_ADDR_BASE + sizeof(struct crb_regs), &s->cmdmem);
+    memory_region_add_subregion(isa_address_space(ISA_DEVICE(dev)),
+                                TPM_CRB_ADDR_BASE, &s->mmio);
 }
 
 static void tpm_crb_class_init(ObjectClass *klass, void *data)
@@ -315,7 +322,7 @@ static void tpm_crb_class_init(ObjectClass *klass, void *data)
 
 static const TypeInfo tpm_crb_info = {
     .name = TYPE_TPM_CRB,
-    .parent = TYPE_SYS_BUS_DEVICE,
+    .parent = TYPE_ISA_DEVICE,
     .instance_size = sizeof(CRBState),
     .class_init  = tpm_crb_class_init,
     .interfaces = (InterfaceInfo[]) {

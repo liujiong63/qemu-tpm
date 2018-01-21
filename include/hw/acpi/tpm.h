@@ -47,6 +47,7 @@ struct crb_regs {
     uint32_t ctrl_rsp_pa_low;
     uint32_t ctrl_rsp_pa_high;
     uint8_t reserved3[0x10];
+    uint8_t data_buffer[0x1000 - 0x80];
 } QEMU_PACKED;
 
 #define TPM_CRB_ADDR_BASE           0xFED40000
