@@ -359,7 +359,7 @@ static void validate_sysbus_device(SysBusDevice *sbdev, void *opaque)
     if (!allowed) {
         error_report("Option '-device %s' cannot be handled by this machine",
                      object_class_get_name(object_get_class(OBJECT(sbdev))));
-        exit(1);
+//        exit(1);
     }
 }
 
