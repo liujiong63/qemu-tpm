@@ -24,57 +24,18 @@
 #define TPM_TIS_IRQ                 5
 
 struct crb_regs {
-    union {
-        uint32_t reg;
-        struct {
-            unsigned tpm_established:1;
-            unsigned loc_assigned:1;
-            unsigned active_locality:3;
-            unsigned reserved:2;
-            unsigned tpm_reg_valid_sts:1;
-        } bits;
-    } loc_state;
+    uint32_t loc_state;
     uint32_t reserved1;
     uint32_t loc_ctrl;
-    union {
-        uint32_t reg;
-        struct {
-            unsigned granted:1;
-            unsigned been_seized:1;
-        } bits;
-    } loc_sts;
+    uint32_t loc_sts;
     uint8_t reserved2[32];
-    union {
-        uint64_t reg;
-        struct {
-            unsigned type:4;
-            unsigned version:4;
-            unsigned cap_locality:1;
-            unsigned cap_crb_idle_bypass:1;
-            unsigned reserved1:1;
-            unsigned cap_data_xfer_size_support:2;
-            unsigned cap_fifo:1;
-            unsigned cap_crb:1;
-            unsigned cap_if_res:2;
-            unsigned if_selector:2;
-            unsigned if_selector_lock:1;
-            unsigned reserved2:4;
-            unsigned rid:8;
-            unsigned vid:16;
-            unsigned did:16;
-        } bits;
-    } intf_id;
-    uint64_t ctrl_ext;
+    uint32_t intf_id_low;
+    uint32_t intf_id_high;
+    uint32_t ctrl_ext_low;
+    uint32_t ctrl_ext_high;
 
     uint32_t ctrl_req;
-    union {
-        uint32_t reg;
-        struct {
-            unsigned tpm_sts:1;
-            unsigned tpm_idle:1;
-            unsigned reserved:30;
-        } bits;
-    } ctrl_sts;
+    uint32_t ctrl_sts;
     uint32_t ctrl_cancel;
     uint32_t ctrl_start;
     uint32_t ctrl_int_enable;
@@ -83,7 +44,8 @@ struct crb_regs {
     uint32_t ctrl_cmd_pa_low;
     uint32_t ctrl_cmd_pa_high;
     uint32_t ctrl_rsp_size;
-    uint64_t ctrl_rsp_pa;
+    uint32_t ctrl_rsp_pa_low;
+    uint32_t ctrl_rsp_pa_high;
     uint8_t reserved3[0x10];
 } QEMU_PACKED;
 

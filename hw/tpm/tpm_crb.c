@@ -55,15 +55,25 @@ typedef struct CRBState {
 #define CRB_ADDR_CTRL_CANCEL offsetof(struct crb_regs, ctrl_cancel)
 #define CRB_ADDR_CTRL_START offsetof(struct crb_regs, ctrl_start)
 
-#define CRB_INTF_TYPE_CRB_ACTIVE 0b1
-#define CRB_INTF_VERSION_CRB 0b1
-#define CRB_INTF_CAP_LOCALITY_0_ONLY 0b0
-#define CRB_INTF_CAP_IDLE_FAST 0b0
-#define CRB_INTF_CAP_XFER_SIZE_64 0b11
-#define CRB_INTF_CAP_FIFO_NOT_SUPPORTED 0b0
-#define CRB_INTF_CAP_CRB_SUPPORTED 0b1
-#define CRB_INTF_IF_SELECTOR_CRB 0b1
-#define CRB_INTF_IF_SELECTOR_UNLOCKED 0b0
+#define CRB_INTF_TYPE_CRB_ACTIVE        (1 << 0)
+#define CRB_INTF_VERSION_CRB            (1 << 4)
+#define CRB_INTF_CAP_LOCALITY_0_ONLY    (0 << 8)
+#define CRB_INTF_CAP_IDLE_FAST          (0 << 9)
+#define CRB_INTF_CAP_XFER_SIZE_64       (3 << 11)
+#define CRB_INTF_CAP_FIFO_NOT_SUPPORTED (0 << 13)
+#define CRB_INTF_CAP_CRB_SUPPORTED      (1 << 14)
+#define CRB_INTF_IF_SELECTOR_CRB        (1 << 17)
+#define CRB_INTF_IF_SELECTOR_UNLOCKED   (0 << 19)
+
+#define CRB_LOC_STATE_TPM_ESTABLISHED   (1 << 0)
+#define CRB_LOC_STATE_LOC_ASSIGNED      (1 << 1)
+#define CRB_LOC_STATE_TPM_REG_VALID_STS (1 << 7)
+
+#define CRB_LOC_STS_GRANTED             (1 << 0)
+#define CRB_LOC_STS_BEEN_SEIZED         (1 << 1)
+
+#define CRB_CTRL_STS_TPM_STS            (1 << 0)
+#define CRB_CTRL_STS_TPM_IDLE           (1 << 1)
 
 #define CRB_CTRL_CMD_SIZE (TPM_CRB_ADDR_SIZE - sizeof(struct crb_regs))
 
@@ -101,8 +111,10 @@ static const char *addr_desc(unsigned off)
         CASE(loc_ctrl);
         CASE(loc_sts);
         CASE(reserved2);
-        CASE(intf_id);
-        CASE(ctrl_ext);
+        CASE(intf_id_low);
+        CASE(intf_id_high);
+        CASE(ctrl_ext_low);
+        CASE(ctrl_ext_high);
         CASE(ctrl_req);
         CASE(ctrl_sts);
         CASE(ctrl_cancel);
@@ -113,7 +125,8 @@ static const char *addr_desc(unsigned off)
         CASE(ctrl_cmd_pa_low);
         CASE(ctrl_cmd_pa_high);
         CASE(ctrl_rsp_size);
-        CASE(ctrl_rsp_pa);
+        CASE(ctrl_rsp_pa_low);
+        CASE(ctrl_rsp_pa_high);
 #undef CASE
     }
     return NULL;
@@ -123,20 +136,13 @@ static uint64_t tpm_crb_mmio_read(void *opaque, hwaddr addr,
                                   unsigned size)
 {
     CRBState *s = CRB(opaque);
-    DPRINTF("CRB read 0x" TARGET_FMT_plx ":%s len:%u\n",
-            addr, addr_desc(addr), size);
-    void *regs = (void *)&s->regs + addr;
+    void *regs = (void *)&s->regs + (addr & ~3);
+    unsigned offset = addr & 3;
+    uint32_t val = *(uint32_t *)regs >> (8 * offset);
 
-    switch (size) {
-    case 1:
-        return *(uint8_t *)regs;
-    case 2:
-        return *(uint16_t *)regs;
-    case 4:
-        return *(uint32_t *)regs;
-    default:
-        g_return_val_if_reached(-1);
-    }
+    DPRINTF("CRB read 0x" TARGET_FMT_plx ":%s len:%u val: 0x%" PRIx32 "\n",
+            addr, addr_desc(addr), size, val);
+    return val;
 }
 
 static void tpm_crb_mmio_write(void *opaque, hwaddr addr,
@@ -150,10 +156,10 @@ static void tpm_crb_mmio_write(void *opaque, hwaddr addr,
     case CRB_ADDR_CTRL_REQ:
         switch (val) {
         case CRB_CTRL_REQ_CMD_READY:
-            s->regs.ctrl_sts.bits.tpm_idle = 0;
+            s->regs.ctrl_sts &= ~CRB_CTRL_STS_TPM_IDLE;
             break;
         case CRB_CTRL_REQ_GO_IDLE:
-            s->regs.ctrl_sts.bits.tpm_idle = 1;
+            s->regs.ctrl_sts |= CRB_CTRL_STS_TPM_IDLE;
             break;
         }
         break;
@@ -186,10 +192,9 @@ static void tpm_crb_mmio_write(void *opaque, hwaddr addr,
         case CRB_LOC_CTRL_RELINQUISH:
             break;
         case CRB_LOC_CTRL_REQUEST_ACCESS:
-            s->regs.loc_sts.bits.granted = 1;
-            s->regs.loc_sts.bits.been_seized = 0;
-            s->regs.loc_state.bits.loc_assigned = 1;
-            s->regs.loc_state.bits.tpm_reg_valid_sts = 1;
+            s->regs.loc_sts = CRB_LOC_STS_GRANTED;
+            s->regs.loc_state = CRB_LOC_STATE_LOC_ASSIGNED |
+                CRB_LOC_STATE_TPM_REG_VALID_STS;
             break;
         }
         break;
@@ -216,25 +221,25 @@ static void tpm_crb_reset(DeviceState *dev)
                             CRB_CTRL_CMD_SIZE);
 
     s->regs = (struct crb_regs) {
-        .intf_id.bits = {
-            .type = CRB_INTF_TYPE_CRB_ACTIVE,
-            .version = CRB_INTF_VERSION_CRB,
-            .cap_locality = CRB_INTF_CAP_LOCALITY_0_ONLY,
-            .cap_crb_idle_bypass = CRB_INTF_CAP_IDLE_FAST,
-            .cap_data_xfer_size_support = CRB_INTF_CAP_XFER_SIZE_64,
-            .cap_fifo = CRB_INTF_CAP_FIFO_NOT_SUPPORTED,
-            .cap_crb = CRB_INTF_CAP_CRB_SUPPORTED,
-            .cap_if_res = 0b0,
-            .if_selector = CRB_INTF_IF_SELECTOR_CRB,
-            .if_selector_lock = CRB_INTF_IF_SELECTOR_UNLOCKED,
-            .rid = 0b0001,
-            .vid = PCI_VENDOR_ID_IBM,
-            .did = 0b0001,
-        },
+        .intf_id_low =
+            CRB_INTF_TYPE_CRB_ACTIVE |
+            CRB_INTF_VERSION_CRB |
+            CRB_INTF_CAP_LOCALITY_0_ONLY |
+            CRB_INTF_CAP_IDLE_FAST |
+            CRB_INTF_CAP_XFER_SIZE_64 |
+            CRB_INTF_CAP_FIFO_NOT_SUPPORTED |
+            CRB_INTF_CAP_CRB_SUPPORTED |
+            CRB_INTF_IF_SELECTOR_CRB |
+            CRB_INTF_IF_SELECTOR_UNLOCKED |
+            0b0001 << 24,
+        .intf_id_high =
+            PCI_VENDOR_ID_IBM |
+            0b0001 << 16
+        ,
         .ctrl_cmd_size = CRB_CTRL_CMD_SIZE,
         .ctrl_cmd_pa_low = TPM_CRB_ADDR_BASE + sizeof(struct crb_regs),
         .ctrl_rsp_size = CRB_CTRL_CMD_SIZE,
-        .ctrl_rsp_pa = TPM_CRB_ADDR_BASE + sizeof(struct crb_regs),
+        .ctrl_rsp_pa_low = TPM_CRB_ADDR_BASE + sizeof(struct crb_regs),
     };
 
     tpm_backend_startup_tpm(s->tpmbe, s->be_buffer_size);
@@ -246,7 +251,7 @@ static void tpm_crb_request_completed(TPMIf *ti, int ret)
 
     s->regs.ctrl_start &= ~CRB_START_INVOKE;
     if (ret != 0) {
-        s->regs.ctrl_sts.bits.tpm_sts = 1; /* fatal error */
+        s->regs.ctrl_sts |= CRB_CTRL_STS_TPM_STS;
     }
 }
 
