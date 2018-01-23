@@ -70,6 +70,6 @@ struct crb_regs {
  * Physical Presence Interface
  */
 #define TPM_PPI_ADDR_SIZE           0x400
-#define TPM_PPI_ADDR_BASE           0xfffef000
+#define TPM_PPI_ADDR_BASE           0xFED45000
 
 #endif /* HW_ACPI_TPM_H */
