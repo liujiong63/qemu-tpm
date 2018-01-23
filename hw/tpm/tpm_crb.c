@@ -26,6 +26,7 @@
 #include "sysemu/tpm_backend.h"
 #include "tpm_int.h"
 #include "tpm_util.h"
+#include "tpm_ppi.h"
 
 typedef struct CRBState {
     ISADevice busdev;
@@ -36,6 +37,8 @@ typedef struct CRBState {
     MemoryRegion mmio;
 
     size_t be_buffer_size;
+
+    TPMPPI ppi;
 } CRBState;
 
 #define CRB(obj) OBJECT_CHECK(CRBState, (obj), TYPE_TPM_CRB)
@@ -303,6 +306,8 @@ static void tpm_crb_realizefn(DeviceState *dev, Error **errp)
 
     memory_region_add_subregion(isa_address_space(ISA_DEVICE(dev)),
                                 TPM_CRB_ADDR_BASE, &s->mmio);
+
+    tpm_ppi_init_io(&s->ppi, isa_address_space(ISA_DEVICE(dev)), OBJECT(s));
 }
 
 static void tpm_crb_class_init(ObjectClass *klass, void *data)

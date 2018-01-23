@@ -2515,6 +2515,7 @@ build_dsdt(GArray *table_data, BIOSLinker *linker,
         aml_append(method, aml_return(aml_int(0x0f)));
         aml_append(dev, method);
 
+        build_tpm_ppi(dev);
         aml_append(sb_scope, dev);
     }
 
